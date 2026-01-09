@@ -39,26 +39,71 @@ npm install axios
 
 ## 使用方法
 
-### 1. 配置脚本
+### 快速开始（推荐）
+
+最简配置，只需 4 个参数即可开始使用：
+
+```javascript
+// 使用百度地图 API
+const userConfig = {
+  inputDir: './data/input',
+  outputDir: './data/output',
+  serviceProvider: 'baidu',
+  apiKey: 'YOUR_BAIDU_AK'
+};
+
+// 或使用高德地图 API
+const userConfig = {
+  inputDir: './data/input',
+  outputDir: './data/output',
+  serviceProvider: 'amap',
+  apiKey: 'YOUR_AMAP_KEY'
+};
+```
+
+系统会自动设置：
+- 坐标转换方向（百度：WGS84→BD09，高德：WGS84→GCJ02）
+- 并发控制参数（根据服务商 API 特性优化）
+- 批次大小（符合 API 限制）
+- 每日配额
+- 缓存文件路径
+
+### 1. 配置脚本（完整说明）
 
 编辑 `convert.js` 文件顶部的配置对象：
 
+**基础配置示例（推荐）**：
 ```javascript
-const config = {
+const userConfig = {
   inputDir: './data/input',        // 输入目录路径
   outputDir: './data/output',      // 输出目录路径
-  recursive: true,                 // 是否递归扫描子目录
   serviceProvider: 'baidu',        // 地图服务提供商：'baidu' 或 'amap'
-  apiKey: 'YOUR_API_KEY',          // API 密钥（百度 AK 或高德 Key）
-  sourceCoordType: 'wgs84',        // 源坐标系：'wgs84', 'gcj02', 'bd09'
-  targetCoordType: 'bd09',         // 目标坐标系：'wgs84', 'gcj02', 'bd09'
-  cacheFile: './cache/coord-cache.json',  // 缓存文件路径
+  apiKey: 'YOUR_API_KEY'           // API 密钥（百度 AK 或高德 Key）
+};
+```
+
+**完整配置示例（高级用户）**：
+```javascript
+const userConfig = {
+  // 必需配置
+  inputDir: './data/input',
+  outputDir: './data/output',
+  serviceProvider: 'baidu',        // 'baidu' 或 'amap'
+  apiKey: 'YOUR_API_KEY',
+  
+  // 可选配置（以下为默认值，可按需修改）
+  recursive: true,                 // 是否递归扫描子目录
   enableCache: true,               // 是否启用缓存
-  maxConcurrency: 2,               // 最大并发请求数
-  batchSize: 100,                  // 单次批量大小（百度最多100，高德最多40）
-  dailyQuota: 5000,                // 每日配额限制
-  retryTimes: 3,                   // 失败重试次数
-  retryDelay: 1000                 // 重试延迟（毫秒，采用指数退避策略）
+  retryTimes: 2,                   // 失败重试次数
+  retryDelay: 1000,                // 重试延迟（毫秒）
+  
+  // 高级配置（通常由 serviceProvider 自动设置，高级用户可覆盖）
+  sourceCoordType: 'wgs84',        // 源坐标系（自动推断）
+  targetCoordType: 'bd09',         // 目标坐标系（自动推断）
+  maxConcurrency: 100,             // 最大并发数（自动推断）
+  batchSize: 100,                  // 批量大小（自动推断）
+  dailyQuota: 150000,              // 每日配额（自动推断）
+  cacheFile: './cache/wgs84Tobd09.json'  // 缓存文件路径（自动生成）
 };
 ```
 
@@ -100,22 +145,71 @@ data/
 
 ### 主要配置项
 
-| 配置项 | 说明 | 默认值 | 备注 |
-|--------|------|--------|------|
-| `inputDir` | 输入目录路径 | `'./data/input'` | 必填，存放原始 GeoJSON 文件 |
-| `outputDir` | 输出目录路径 | `'./data/output'` | 必填，转换后文件保存位置 |
-| `recursive` | 递归扫描子目录 | `true` | 是否处理子目录下的文件 |
-| `serviceProvider` | 地图服务提供商 | `'baidu'` | 可选 `'baidu'` 或 `'amap'` |
-| `apiKey` | API 密钥 | - | 必填，百度 AK 或高德 Key |
-| `sourceCoordType` | 源坐标系 | `'wgs84'` | 可选 `'wgs84'`, `'gcj02'`, `'bd09'` |
-| `targetCoordType` | 目标坐标系 | `'bd09'` | 可选 `'wgs84'`, `'gcj02'`, `'bd09'` |
-| `cacheFile` | 缓存文件路径 | `'./cache/coord-cache.json'` | 存储已转换的坐标 |
-| `enableCache` | 启用缓存 | `true` | 建议启用，减少 API 调用 |
-| `maxConcurrency` | 最大并发数 | `2` | 控制同时发起的 API 请求数量 |
-| `batchSize` | 批量大小 | `100` | 百度最多100，高德最多40 |
-| `dailyQuota` | 每日配额 | `5000` | 根据 API 服务等级设置 |
-| `retryTimes` | 重试次数 | `3` | API 调用失败时的重试次数 |
-| `retryDelay` | 重试延迟 | `1000` | 毫秒，采用指数退避策略 |
+| 配置项 | 类型 | 说明 | 默认值/自动推断 | 备注 |
+|--------|------|------|----------------|------|
+| `inputDir` | 必需 | 输入目录路径 | - | 存放原始 GeoJSON 文件 |
+| `outputDir` | 必需 | 输出目录路径 | - | 转换后文件保存位置 |
+| `serviceProvider` | 必需 | 地图服务提供商 | - | 可选 `'baidu'` 或 `'amap'` |
+| `apiKey` | 必需 | API 密钥 | - | 百度 AK 或高德 Key |
+| `recursive` | 可选 | 递归扫描子目录 | `true` | 是否处理子目录下的文件 |
+| `enableCache` | 可选 | 启用缓存 | `true` | 建议启用，减少 API 调用 |
+| `retryTimes` | 可选 | 重试次数 | `2` | API 调用失败时的重试次数 |
+| `retryDelay` | 可选 | 重试延迟 | `1000` | 毫秒，采用指数退避策略 |
+| `sourceCoordType` | 自动推断 | 源坐标系 | 根据 serviceProvider 推断 | 可手动覆盖，可选 `'wgs84'`, `'gcj02'`, `'bd09'` |
+| `targetCoordType` | 自动推断 | 目标坐标系 | 根据 serviceProvider 推断 | 可手动覆盖，可选 `'wgs84'`, `'gcj02'`, `'bd09'` |
+| `maxConcurrency` | 自动推断 | 最大并发数 | 百度: 100, 高德: 3 | 控制同时发起的 API 请求数量 |
+| `batchSize` | 自动推断 | 批量大小 | 百度: 100, 高德: 40 | 单次批量转换的坐标数量 |
+| `dailyQuota` | 自动推断 | 每日配额 | 百度: 150000, 高德: 10000 | 根据 API 服务等级设置 |
+| `cacheFile` | 自动推断 | 缓存文件路径 | `./cache/{source}To{target}.json` | 根据坐标转换类型自动生成 |
+
+### 服务提供商预设配置
+
+配置简化后，系统会根据 `serviceProvider` 自动设置相关参数，您只需关注业务配置。
+
+#### 百度地图预设配置
+
+当 `serviceProvider: 'baidu'` 时，自动应用以下配置：
+
+| 配置项 | 预设值 | 说明 |
+|--------|--------|------|
+| apiKey | 无 | 百度 AK（需在用户配置中覆盖） |
+| sourceCoordType | `'wgs84'` | GPS 坐标系 |
+| targetCoordType | `'bd09'` | 百度坐标系 |
+| maxConcurrency | `100` | 百度 API 支持较高并发 |
+| batchSize | `100` | 百度 API 单次最多支持 100 个坐标 |
+| dailyQuota | `150000` | 标准配额 |
+| cacheFile | `'./cache/wgs84Tobd09.json'` | 自动生成缓存文件路径 |
+
+**适用场景**：WGS84（GPS）坐标转换为百度地图坐标
+
+**自定义转换方向**：如需其他转换方向（如 GCJ02 转 BD09），可手动设置 `sourceCoordType: 'gcj02'`
+
+#### 高德地图预设配置
+
+当 `serviceProvider: 'amap'` 时，自动应用以下配置：
+
+| 配置项 | 预设值 | 说明 |
+|--------|--------|------|
+| apiKey | 无 | 高德 Key（示例密钥） |
+| sourceCoordType | `'wgs84'` | GPS 坐标系 |
+| targetCoordType | `'gcj02'` | 国测局坐标系（火星坐标） |
+| maxConcurrency | `3` | 保守并发设置，避免触发 QPS 限制 |
+| batchSize | `40` | 高德 API 单次最多支持 40 个坐标 |
+| dailyQuota | `10000` | 标准配额 |
+| cacheFile | `'./cache/wgs84Togcj02.json'` | 自动生成缓存文件路径 |
+
+**适用场景**：WGS84（GPS）或 BD09 坐标转换为高德地图坐标（GCJ02）
+
+**QPS 限制说明**：高德 API 存在 QPS（每秒查询数）限制，预设并发数为 3 可有效避免触发限制（错误码 10021）
+
+#### 参数差异说明
+
+不同服务商的参数差异主要源于以下原因：
+
+- **坐标系差异**：百度使用自有 BD09 坐标系，高德使用国家标准 GCJ02 坐标系
+- **API 限制**：高德单次请求最多 40 个坐标点，百度支持 100 个
+- **并发控制**：高德存在 QPS 限制需要保守并发，百度支持更高并发
+- **配额差异**：不同服务商的标准配额不同
 
 ### 坐标系支持矩阵
 
