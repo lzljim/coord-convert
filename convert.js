@@ -2,6 +2,41 @@ const fs = require('fs');
 const path = require('path');
 const axios = require('axios');
 
+// 用户配置对象 - 直接修改这里
+const userConfig = {
+  inputDir: './data/input',        // 输入目录路径
+  outputDir: './data/output',      // 输出目录路径
+  serviceProvider: 'baidu',        // 地图服务提供商：'baidu' 或 'amap'
+};
+
+// 服务提供商预设配置
+const SERVICE_PROVIDER_PRESETS = {
+  baidu: {
+    apiKey: 'YOUR_API_KEY', // API 密钥
+    sourceCoordType: 'wgs84',
+    targetCoordType: 'bd09',
+    maxConcurrency: 100,
+    batchSize: 100,
+    dailyQuota: 150000
+  },
+  amap: {
+    apiKey: 'YOUR_API_KEY', // API 密钥
+    sourceCoordType: 'wgs84',
+    targetCoordType: 'gcj02',
+    maxConcurrency: 3,
+    batchSize: 40,
+    dailyQuota: 10000
+  }
+};
+
+// 全局默认配置
+const DEFAULT_CONFIG = {
+  recursive: true,
+  enableCache: true,
+  retryTimes: 2,
+  retryDelay: 1000
+};
+
 // 导入 p-limit，支持不同版本的兼容性
 let pLimit;
 try {
@@ -30,23 +65,90 @@ try {
   };
 }
 
-// 配置对象 - 直接修改这里
-const config = {
-  inputDir: './data/input',        // 输入目录路径
-  outputDir: './data/output',      // 输出目录路径
-  recursive: true,                 // 是否递归扫描子目录
-  serviceProvider: 'baidu',        // 地图服务提供商：'baidu' 或 'amap'
-  apiKey: 'YOUR_API_KEY',          // API 密钥（百度 AK 或高德 Key）
-  sourceCoordType: 'wgs84',        // 源坐标系：'wgs84', 'gcj02', 'bd09'
-  targetCoordType: 'bd09',         // 目标坐标系：'wgs84', 'gcj02', 'bd09'
-  cacheFile: './cache/coord-cache.json',  // 缓存文件路径
-  enableCache: true,               // 是否启用缓存
-  maxConcurrency: 2,               // 最大并发请求数
-  batchSize: 100,                  // 单次批量大小（百度最多100，高德最多40）
-  dailyQuota: 5000,                // 每日配额限制
-  retryTimes: 3,                   // 失败重试次数
-  retryDelay: 1000                 // 重试延迟（毫秒，采用指数退避策略）
+// 配置合并和验证函数
+function buildConfig(userConfig) {
+  // 验证必需配置
+  if (!userConfig.inputDir) {
+    throw new Error('配置错误: inputDir 是必需的');
+  }
+  if (!userConfig.outputDir) {
+    throw new Error('配置错误: outputDir 是必需的');
+  }
+  if (!userConfig.serviceProvider) {
+    throw new Error('配置错误: serviceProvider 是必需的');
+  }
+  // 验证 serviceProvider
+  if (!SERVICE_PROVIDER_PRESETS[userConfig.serviceProvider]) {
+    throw new Error(`配置错误: serviceProvider 必须是 'baidu' 或 'amap'，当前值: ${userConfig.serviceProvider}`);
+  }
+
+  // 获取预设配置
+  const preset = SERVICE_PROVIDER_PRESETS[userConfig.serviceProvider];
+
+  // 合并配置：默认值 ← 预设值 ← 用户配置
+  const mergedConfig = {
+    ...DEFAULT_CONFIG,
+    ...preset,
+    ...userConfig
+  };
+
+  // 自动生成 cacheFile（如果用户未指定）
+  if (!userConfig.cacheFile) {
+    const source = mergedConfig.sourceCoordType;
+    const target = mergedConfig.targetCoordType;
+    mergedConfig.cacheFile = `./cache/${source}To${target}.json`;
+  }
+
+  // 配置验证
+  if (!mergedConfig.apiKey) {
+    throw new Error('配置错误: apiKey 是必需的');
+  }
+  if (mergedConfig.apiKey === 'YOUR_API_KEY') {
+    throw new Error('请在配置中设置有效的 API 密钥');
+  }
+  if (mergedConfig.maxConcurrency <= 0) {
+    throw new Error('配置错误: maxConcurrency 必须大于 0');
+  }
+  if (mergedConfig.batchSize <= 0) {
+    throw new Error('配置错误: batchSize 必须大于 0');
+  }
+  if (mergedConfig.dailyQuota <= 0) {
+    throw new Error('配置错误: dailyQuota 必须大于 0');
+  }
+  if (mergedConfig.retryTimes < 0) {
+    throw new Error('配置错误: retryTimes 必须大于等于 0');
+  }
+
+  // 高德特定验证
+  if (mergedConfig.serviceProvider === 'amap') {
+    if (mergedConfig.batchSize > 40) {
+      log('警告: 高德 API 单次最多支持 40 个坐标点，已自动调整 batchSize 为 40', 'WARN');
+      mergedConfig.batchSize = 40;
+    }
+    if (mergedConfig.targetCoordType !== 'gcj02') {
+      throw new Error('配置错误: 高德 API 只能转换为 GCJ02 坐标系');
+    }
+  }
+
+  // 百度特定验证
+  if (mergedConfig.serviceProvider === 'baidu') {
+    if (mergedConfig.targetCoordType === 'wgs84') {
+      throw new Error('配置错误: 百度 API 不支持将坐标转换为 WGS84(GPS) 坐标系');
+    }
+  }
+
+  return mergedConfig;
+}
+
+// 构建最终配置
+const config = buildConfig(userConfig);
+
+// 输出最终合并的配置（隐藏敏感信息）
+const configForLog = {
+  ...config,
+  apiKey: config.apiKey ? '***' + config.apiKey.slice(-4) : '未设置'
 };
+log('最终配置: ' + JSON.stringify(configForLog, null, 2));
 
 // 全局缓存变量
 let globalCache = new Map();
@@ -161,6 +263,30 @@ function readGeoJSON(filePath) {
   return JSON.parse(content);
 }
 
+// 坐标验证函数
+function isValidCoordinate(value) {
+  if (!Array.isArray(value) || value.length !== 2) {
+    return false;
+  }
+  
+  const [lon, lat] = value;
+  
+  if (typeof lon !== 'number' || typeof lat !== 'number') {
+    return false;
+  }
+  
+  if (isNaN(lon) || isNaN(lat)) {
+    return false;
+  }
+  
+  // 验证经纬度范围
+  if (lon < -180 || lon > 180 || lat < -90 || lat > 90) {
+    return false;
+  }
+  
+  return true;
+}
+
 function extractCoordinates(geojson) {
   const coordinates = [];
 
@@ -174,6 +300,24 @@ function extractCoordinates(geojson) {
         extract(obj.features, [...path, 'features']);
       } else if (obj.type === 'Feature' && obj.geometry) {
         extract(obj.geometry, [...path, 'geometry']);
+        // 处理 properties 中的 center 和 centroid 坐标
+        if (obj.properties && typeof obj.properties === 'object') {
+          const props = obj.properties;
+          // 提取 center 坐标
+          if (props.center && isValidCoordinate(props.center)) {
+            coordinates.push({
+              coordinate: [props.center[0], props.center[1]],
+              path: [...path, 'properties', 'center']
+            });
+          }
+          // 提取 centroid 坐标
+          if (props.centroid && isValidCoordinate(props.centroid)) {
+            coordinates.push({
+              coordinate: [props.centroid[0], props.centroid[1]],
+              path: [...path, 'properties', 'centroid']
+            });
+          }
+        }
       } else if (obj.type === 'GeometryCollection' && obj.geometries) {
         extract(obj.geometries, [...path, 'geometries']);
       } else if (obj.coordinates) {
